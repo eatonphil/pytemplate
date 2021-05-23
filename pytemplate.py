@@ -1,6 +1,14 @@
 import io
 
 
+def eval_template(template: str, env: dict) -> str:
+    tokens = lex(template)
+    ast, _ = parse(tokens)
+    with io.StringIO() as memfd:
+        interpret(memfd, ast, env)
+        return memfd.getvalue()
+
+
 BLOCK_OPEN = '{%'
 BLOCK_CLOSE = '%}'
 
@@ -80,100 +88,6 @@ def lex(source):
     return tokens
 
 
-def lex_node(source):
-    tokens = []
-    cursor = 0
-    current = ''
-    while cursor < len(source):
-        char = getelement(source, cursor)
-        if char in ['\r', '\t', '\n', ' ']:
-            if current:
-                tokens.append({
-                    'value': current,
-                    'type': 'literal',
-                })
-                current = ''
-
-            cursor += 1
-            continue
-
-        if char in ['(', ')', ',']:
-            if current:
-                tokens.append({
-                    'value': current,
-                    'type': 'literal',
-                })
-                current = ''
-
-            tokens.append({
-                'value': char,
-                'type': 'syntax',
-            })
-            cursor += 1
-            continue
-
-        current += char
-        cursor +=1
-
-    return tokens
-
-
-def parse_node_args(tokens):
-    args = []
-    cursor = 0
-    while cursor < len(tokens):
-        t = getelement(tokens, cursor)
-        if t['value'] == ')':
-            return args, cursor + 1
-        
-        if len(args) and t['value'] == ',':
-            cursor += 1
-        elif len(args) and t['value'] != ',':
-            raise Exception('Expected comma to separate args')
-
-        args.append(getelement(tokens, cursor))
-        cursor += 1
-
-    return args, cursor
-
-
-def parse_node(tokens):
-    cursor = 0
-    ast = None
-    while cursor < len(tokens):
-        t = getelement(tokens, cursor)
-        if t['type'] != 'literal':
-            raise Exception('Expected literal')
-        cursor += 1
-
-        next_t = getelement(tokens, cursor)
-        if not next_t:
-            ast = t
-            break
-
-        if next_t['value'] != '(':
-            ast = t
-            break
-
-        cursor += 1
-
-        if next_t['value'] == '(':
-            args, cursor = parse_node_args(tokens[cursor:])
-            ast = {
-                'type': 'function',
-                'value': t['value'].strip(),
-                'args': args,
-            }
-            cursor += 2
-
-        break
-
-    if cursor != len(tokens):
-        raise Exception('Failed to parse node: ' + tokens[cursor]['value'])
-
-    return ast
-
-
 def parse(tokens, end_of_block_marker=None):
     cursor = 0
     ast = []
@@ -230,50 +144,98 @@ def parse(tokens, end_of_block_marker=None):
     return ast, cursor
 
 
-def interpret_node(node, env):
-    if node['type'] == 'literal':
-        # Is a string
-        if node['value'][0] == "'" and node['value'][-1] == "'":
-            return node['value'][1:-1]
+def lex_node(source):
+    tokens = []
+    cursor = 0
+    current = ''
+    while cursor < len(source):
+        char = getelement(source, cursor)
+        if char in ['\r', '\t', '\n', ' ']:
+            if current:
+                tokens.append({
+                    'value': current,
+                    'type': 'literal',
+                })
+                current = ''
 
-        # Default to an env lookup
-        return env[node['value']]
+            cursor += 1
+            continue
 
-    function = node['value']
-    args = node['args']
-    if function == '==':
-        arg_vals = [interpret_node(arg) for arg in args]
-        if arg_vals.count(arg_vals[0]) == len(arg_vals):
-            return True
+        if char in ['(', ')', ',']:
+            if current:
+                tokens.append({
+                    'value': current,
+                    'type': 'literal',
+                })
+                current = ''
 
-        return False
+            tokens.append({
+                'value': char,
+                'type': 'syntax',
+            })
+            cursor += 1
+            continue
 
-    if function == 'get':
-        arg_vals = [interpret_node(arg, env) for arg in args]
-        return arg_vals[0][arg_vals[1]]
+        current += char
+        cursor +=1
 
-    return env[function]
+    return tokens
 
 
-def interpret_block(outfd, node, child, env):
-    function = node['value']
-    args = node['args']
-    if function == 'if' and interpret_node(node):
-        interpret(outfd, child, env)
-        return
+def parse_node(tokens):
+    cursor = 0
+    ast = None
+    while cursor < len(tokens):
+        t = getelement(tokens, cursor)
+        if t['type'] != 'literal':
+            raise Exception('Expected literal')
+        cursor += 1
 
-    if function == 'for-in':
-        loop_variable = args[1]
-        loop_iter_variable = args[0]['value']
+        next_t = getelement(tokens, cursor)
+        if not next_t:
+            ast = t
+            break
 
-        for elem in interpret_node(loop_variable, env):
-            child_env = env.copy()
-            child_env[loop_iter_variable] = elem
-            interpret(outfd, child, child_env)
+        if next_t['value'] != '(':
+            ast = t
+            break
 
-        return
+        cursor += 1
 
-    raise Exception('Unsupported block node function: ' + function)
+        if next_t['value'] == '(':
+            args, cursor = parse_node_args(tokens[cursor:])
+            ast = {
+                'type': 'function',
+                'value': t['value'].strip(),
+                'args': args,
+            }
+            cursor += 2
+
+        break
+
+    if cursor != len(tokens):
+        raise Exception('Failed to parse node: ' + tokens[cursor]['value'])
+
+    return ast
+
+
+def parse_node_args(tokens):
+    args = []
+    cursor = 0
+    while cursor < len(tokens):
+        t = getelement(tokens, cursor)
+        if t['value'] == ')':
+            return args, cursor + 1
+        
+        if len(args) and t['value'] == ',':
+            cursor += 1
+        elif len(args) and t['value'] != ',':
+            raise Exception('Expected comma to separate args')
+
+        args.append(getelement(tokens, cursor))
+        cursor += 1
+
+    return args, cursor
 
 
 def interpret(outfd, ast, env):
@@ -297,10 +259,47 @@ def interpret(outfd, ast, env):
         raise Exception('Unknown type: ' + item_type)
 
 
-def eval_template(template: str, env: dict) -> str:
-    tokens = lex(template)
-    ast = parse(tokens)[0]
-    with io.StringIO() as memfd:
-        interpret(memfd, ast, env)
-        memfd.flush()
-        return memfd.getvalue()
+def interpret_node(node, env):
+    if node['type'] == 'literal':
+        # Is a string
+        if node['value'][0] == "'" and node['value'][-1] == "'":
+            return node['value'][1:-1]
+
+        # Default to an env lookup
+        return env[node['value']]
+
+    function = node['value']
+    args = node['args']
+    if function == '==':
+        arg_vals = [interpret_node(arg) for arg in args]
+        if arg_vals.count(arg_vals[0]) == len(arg_vals):
+            return True
+
+        return False
+
+    if function == 'get':
+        arg_vals = [interpret_node(arg, env) for arg in args]
+        return arg_vals[0][arg_vals[1]]
+
+    raise Exception('Unknown function: ' + function)
+
+
+def interpret_block(outfd, node, child, env):
+    function = node['value']
+    args = node['args']
+    if function == 'if' and interpret_node(node):
+        interpret(outfd, child, env)
+        return
+
+    if function == 'for-in':
+        loop_variable = args[1]
+        loop_iter_variable = args[0]['value']
+
+        for elem in interpret_node(loop_variable, env):
+            child_env = env.copy()
+            child_env[loop_iter_variable] = elem
+            interpret(outfd, child, child_env)
+
+        return
+
+    raise Exception('Unsupported block node function: ' + function)
