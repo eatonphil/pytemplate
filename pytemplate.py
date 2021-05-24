@@ -271,7 +271,7 @@ def interpret_node(node, env):
     function = node['value']
     args = node['args']
     if function == '==':
-        arg_vals = [interpret_node(arg) for arg in args]
+        arg_vals = [interpret_node(arg, env) for arg in args]
         if arg_vals.count(arg_vals[0]) == len(arg_vals):
             return True
 
@@ -287,7 +287,7 @@ def interpret_node(node, env):
 def interpret_block(outfd, node, child, env):
     function = node['value']
     args = node['args']
-    if function == 'if' and interpret_node(node):
+    if function == 'if' and interpret_node(node, env):
         interpret(outfd, child, env)
         return
 
